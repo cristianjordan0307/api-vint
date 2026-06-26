@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str
     FRONTEND_URL: str = "http://localhost:3000"
     ANTHROPIC_API_KEY: str | None = None
+    MERCADOPAGO_ACCESS_TOKEN: str | None = None
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
