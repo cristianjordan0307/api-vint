@@ -3,28 +3,37 @@ schemas/products.py — Modelos Pydantic para el CRUD de productos.
 """
 
 from pydantic import BaseModel
+from typing import Optional
 
 
 class ProductCreate(BaseModel):
     name: str
-    description: str | None = None
+    description: Optional[str] = None
     price: float
-    category: str | None = None
-    image_url: str | None = None
-    size: str | None = None
-    color: str | None = None
-    gender: str | None = None
-    condition: str | None = None
-    status: str | None = None
+    category: Optional[str] = None
+    image_url: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = None
+    condition: Optional[str] = None
+    brand: Optional[str] = None
+    status: Optional[str] = None
 
 
 class ProductUpdate(BaseModel):
     id: str
-    name: str | None = None
-    description: str | None = None
-    price: float | None = None
-    status: str | None = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    status: Optional[str] = None
+    image_url: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = None
+    condition: Optional[str] = None
+    brand: Optional[str] = None
 
 
 class ProductDelete(BaseModel):
-    ids: list[int]
+    # Acepta tanto strings como ints para máxima compatibilidad con el frontend
+    ids: list[str]
