@@ -6,6 +6,7 @@ Incluye algoritmo local + fallback a Claude (Anthropic) si la API key está conf
 """
 
 import json
+import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from supabase_client import get_admin_client
@@ -29,8 +30,10 @@ def _get_resumen_comportamiento(client, user_id: str) -> dict | None:
 
     try:
         hace7dias = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        # FIX: especificar schema correcto para eventos_usuario
         resp = (
-            client.from_("eventos_usuario")
+            client.schema("catalogo")
+            .from_("eventos_usuario")
             .select("tipo, termino, categoria, creado_en")
             .eq("id_usuario", user_id)
             .gte("creado_en", hace7dias)
@@ -71,21 +74,53 @@ def _get_resumen_comportamiento(client, user_id: str) -> dict | None:
             "totalFavoritos": total_favoritos,
             "totalCarrito": total_carrito,
         }
-    except Exception:
+    except Exception as e:
+        print(f"[recomendaciones] Error obteniendo comportamiento: {e}")
         return None
+
+
+def _extraer_json(text: str) -> dict:
+    """
+    Extrae JSON válido de la respuesta de Claude aunque venga envuelta en
+    bloques de markdown (```json ... ```) u otro texto adicional.
+    """
+    # Intentar parsear directamente
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Buscar bloque ```json ... ``` o ``` ... ```
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if match:
+        try:
+            return json.loads(match.group(1).strip())
+        except Exception:
+            pass
+
+    # Buscar el primer objeto JSON { ... }
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+
+    raise ValueError("No se pudo extraer JSON válido de la respuesta de Claude")
 
 
 def _obtener_recomendaciones_locales(
     prendas: list, preferencias: dict | None, favorito_ids: list[str] | None = None
 ) -> list:
     """Algoritmo local de recomendaciones basado en filtros."""
-    fav_set = set(favorito_ids or [])
-    pool = [p for p in prendas if p.get("id_prenda") not in fav_set]
+    # FIX: normalizar favorito_ids a strings para comparación segura
+    fav_set = {str(fid) for fid in (favorito_ids or [])}
+    pool = [p for p in prendas if str(p.get("id_prenda", "")) not in fav_set]
 
     if not preferencias:
         return [
             {
-                **{k: p[k] for k in ("id_prenda", "titulo", "talla", "condicion", "vendedor", "imagen_principal", "categoria")},
+                **{k: p.get(k) for k in ("id_prenda", "titulo", "talla", "condicion", "vendedor", "imagen_principal", "categoria")},
                 "precio": float(p.get("precio", 0)),
                 "razon": "Seleccionado especialmente para ti basándonos en las últimas novedades.",
             }
@@ -127,11 +162,11 @@ def _obtener_recomendaciones_locales(
 
     # Rellenar si faltan
     if len(seleccionadas) < 10:
-        ids_sel = {p.get("id_prenda") for p in seleccionadas}
+        ids_sel = {str(p.get("id_prenda")) for p in seleccionadas}
         for p in pool:
             if len(seleccionadas) >= 10:
                 break
-            if p.get("id_prenda") not in ids_sel:
+            if str(p.get("id_prenda")) not in ids_sel:
                 seleccionadas.append(p)
 
     result = []
@@ -159,39 +194,75 @@ def _obtener_recomendaciones_locales(
 
 @router.post("")
 async def get_recomendaciones(body: RecomendacionesRequest):
-    """Obtener 10 recomendaciones personalizadas de prendas."""
+    """Obtener hasta 10 recomendaciones personalizadas de prendas."""
     client = get_admin_client()
 
-    # 1. Catálogo
-    resp = (
-        client.from_("v_catalogo_publico")
-        .select("id_prenda, titulo, precio, talla, condicion, vendedor, imagen_principal, categoria")
-        .limit(60)
-        .execute()
-    )
+    # FIX: especificar schema 'catalogo' para la vista v_catalogo_publico
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("v_catalogo_publico")
+            .select("id_prenda, titulo, precio, talla, condicion, vendedor, imagen_principal, categoria")
+            .limit(60)
+            .execute()
+        )
+        prendas = resp.data or []
+    except Exception as e:
+        print(f"[recomendaciones] Error al consultar catálogo con schema: {e}")
+        # Fallback: intentar sin schema explícito (compatible con algunas configs de Supabase)
+        try:
+            resp = (
+                client.from_("v_catalogo_publico")
+                .select("id_prenda, titulo, precio, talla, condicion, vendedor, imagen_principal, categoria")
+                .limit(60)
+                .execute()
+            )
+            prendas = resp.data or []
+        except Exception as e2:
+            print(f"[recomendaciones] Error en fallback de catálogo: {e2}")
+            prendas = []
 
-    prendas = resp.data or []
     if not prendas:
         return {"recomendaciones": []}
 
-    # 2. Fallback local (siempre disponible)
+    # Algoritmo local (siempre disponible como fallback)
     fallback = _obtener_recomendaciones_locales(prendas, body.preferencias, body.favoritoIds)
 
-    # 3. Intentar con Claude si hay API key
+    # Intentar con Claude si hay API key configurada
     settings = get_settings()
     if not settings.ANTHROPIC_API_KEY:
         return {"recomendaciones": fallback}
 
-    # Construir prompt (simplificado)
     try:
         comportamiento = _get_resumen_comportamiento(client, body.userId) if body.userId else None
 
-        prompt = f"""Eres el motor de recomendaciones de Vint. Recomienda exactamente 10 prendas del catálogo.
-Preferencias: {json.dumps(body.preferencias or {}, ensure_ascii=False)}
-Comportamiento: {json.dumps(comportamiento or {}, ensure_ascii=False)}
-Catálogo: {json.dumps(prendas, ensure_ascii=False)}
+        # Limitar catálogo enviado a Claude para no exceder tokens
+        prendas_para_claude = prendas[:30]
 
-Responde ÚNICAMENTE con JSON válido: {{"recomendaciones": [...]}}"""
+        prompt = f"""Eres el motor de recomendaciones de Vint (moda de segunda mano en Colombia).
+Recomienda exactamente 10 prendas del catálogo para el usuario.
+
+Preferencias del usuario: {json.dumps(body.preferencias or {}, ensure_ascii=False)}
+Comportamiento reciente: {json.dumps(comportamiento or {}, ensure_ascii=False)}
+IDs a EXCLUIR (ya son favoritos): {json.dumps(body.favoritoIds or [], ensure_ascii=False)}
+
+Catálogo disponible:
+{json.dumps(prendas_para_claude, ensure_ascii=False)}
+
+Responde ÚNICAMENTE con JSON válido, sin texto adicional, sin bloques markdown:
+{{"recomendaciones": [
+  {{
+    "id_prenda": "string",
+    "titulo": "string",
+    "precio": number,
+    "talla": "string",
+    "condicion": "string",
+    "vendedor": "string",
+    "imagen_principal": "string o null",
+    "categoria": "string",
+    "razon": "Frase corta explicando por qué se recomienda"
+  }}
+]}}"""
 
         async with httpx.AsyncClient() as http:
             ai_resp = await http.post(
@@ -211,10 +282,16 @@ Responde ÚNICAMENTE con JSON válido: {{"recomendaciones": [...]}}"""
 
         if ai_resp.status_code == 200:
             data = ai_resp.json()
-            text = data.get("content", [{}])[0].get("text", "{}")
-            parsed = json.loads(text)
-            return parsed
+            text = data.get("content", [{}])[0].get("text", "")
+            # FIX: usar extractor robusto de JSON
+            parsed = _extraer_json(text)
+            recs = parsed.get("recomendaciones", [])
+            if recs:
+                return {"recomendaciones": recs}
+        else:
+            print(f"[recomendaciones] Claude error {ai_resp.status_code}: {ai_resp.text[:200]}")
+
     except Exception as e:
-        print(f"[recomendaciones] Error con Claude: {e}")
+        print(f"[recomendaciones] Error con Claude, usando fallback local: {e}")
 
     return {"recomendaciones": fallback}
