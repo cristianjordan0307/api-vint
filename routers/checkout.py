@@ -55,10 +55,12 @@ async def create_mercadopago_preference(body: PreferenceCreate):
             "failure": f"{settings.FRONTEND_URL}/checkout",
             "pending": f"{settings.FRONTEND_URL}/checkout"
         },
-        "auto_return": "approved",
         "external_reference": external_ref,
         "notification_url": "https://vint-api-production.up.railway.app/api/checkout/webhook" # Reemplazar con URL de producción en despliegue si es necesario
     }
+
+    if "localhost" not in settings.FRONTEND_URL and "127.0.0.1" not in settings.FRONTEND_URL:
+        payload["auto_return"] = "approved"
 
     headers = {
         "Authorization": f"Bearer {settings.MERCADOPAGO_ACCESS_TOKEN}",
@@ -80,8 +82,11 @@ async def create_mercadopago_preference(body: PreferenceCreate):
                 "initPoint": data.get("init_point")
             }
         except Exception as e:
-            print(f"[checkout] Error al crear preferencia: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error de comunicación con Mercado Pago.")
+            error_detail = ""
+            if hasattr(e, 'response') and e.response is not None:
+                error_detail = e.response.text
+            print(f"[checkout] Error al crear preferencia: {str(e)} | Response: {error_detail}")
+            raise HTTPException(status_code=500, detail=f"Error de comunicación con Mercado Pago: {error_detail or str(e)}")
 
 
 @router.post("/webhook")
