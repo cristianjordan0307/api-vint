@@ -30,6 +30,17 @@ def db_status_to_ui(estado: str) -> str:
     return "draft"
 
 
+def normalize_genero(gender_raw: str | None) -> str:
+    """Normaliza el género para cumplir con la restricción check constraint ck_prenda_genero ('Unisex', 'Hombre', 'Mujer')."""
+    val = (gender_raw or "unisex").lower()
+    if "mujer" in val or "female" in val:
+        return "Mujer"
+    elif "hombre" in val or "male" in val:
+        return "Hombre"
+    else:
+        return "Unisex"
+
+
 def get_catalogo_client():
     """Cliente admin apuntando al esquema catalogo."""
     from supabase import create_client
@@ -41,6 +52,23 @@ def get_catalogo_client():
         s.SUPABASE_SERVICE_ROLE_KEY,
         options={"schema": "catalogo"},  # type: ignore[arg-type]
     )
+
+
+# ── GET /api/products/categories ─────────────────────────────────────────────
+
+@router.get("/categories")
+async def get_categories():
+    """Obtener todas las categorías de prendas del catálogo."""
+    client = get_admin_client()
+    resp = (
+        client.schema("catalogo")
+        .from_("categorias")
+        .select("id_categoria, nombre")
+        .order("nombre")
+        .execute()
+    )
+    mapped = [{"id": str(c["id_categoria"]), "nombre": c["nombre"]} for c in resp.data or []]
+    return mapped
 
 
 # ── GET /api/products ────────────────────────────────────────────────────────
@@ -131,28 +159,51 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
     else:
         condicion = "USADO"
 
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="El nombre del producto no puede estar vacío.")
+
+    if body.price <= 0:
+        raise HTTPException(status_code=400, detail="El precio debe ser mayor a cero.")
+
+    # Validar y normalizar descripción
+    desc_val = "Sin descripción adicional sobre la prenda."
+    if body.description:
+        desc_stripped = body.description.strip()
+        if len(desc_stripped) > 0 and len(desc_stripped) < 10:
+            raise HTTPException(
+                status_code=400,
+                detail="La descripción debe tener al menos 10 caracteres."
+            )
+        if len(desc_stripped) >= 10:
+            desc_val = desc_stripped
+
     insert_data = {
         "id_usuario": id_usuario,
         "id_categoria": id_categoria,
         "id_marca": 1,
-        "titulo": body.name,
-        "descripcion": body.description or "",
+        "titulo": body.name.strip(),
+        "descripcion": desc_val,
         "precio": body.price,
         "talla": body.size or "Única",
         "color": body.color or "Combinado",
-        "genero": body.gender or "UNISEX",
+        "genero": normalize_genero(body.gender),
         "condicion": condicion,
         "estado_publicacion": ui_status_to_db(body.status or "draft"),
     }
 
-    resp = (
-        client.schema("catalogo")
-        .from_("prendas")
-        .insert(insert_data)
-        .execute()
-    )
-
-    prenda = resp.data[0] if resp.data else None
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("prendas")
+            .insert(insert_data)
+            .execute()
+        )
+        prenda = resp.data[0] if resp.data else None
+    except Exception as e:
+        error_msg = str(e)
+        if "id_categoria" in error_msg:
+            raise HTTPException(status_code=400, detail="La categoría seleccionada no es válida.")
+        raise HTTPException(status_code=500, detail=f"Error al crear la prenda: {error_msg}")
 
     if body.image_url and prenda:
         client.schema("catalogo").from_("imagenes_prendas").insert({
@@ -170,14 +221,43 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
 @router.patch("")
 async def update_product(body: ProductUpdate, user=Depends(get_current_user)):
     """Actualizar campos de una prenda existente (incluyendo imagen principal)."""
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
     client = get_admin_client()
+    prenda_id = int(body.id)
+
+    # Verificar que la prenda le pertenece al usuario
+    prenda_resp = (
+        client.schema("catalogo")
+        .from_("prendas")
+        .select("id_usuario")
+        .eq("id_prenda", prenda_id)
+        .execute()
+    )
+    if not prenda_resp.data:
+        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
+    if prenda_resp.data[0]["id_usuario"] != id_usuario:
+        raise HTTPException(status_code=403, detail="No tienes permisos para modificar esta prenda.")
+
     db_update: dict = {}
 
     if body.name is not None:
-        db_update["titulo"] = body.name
+        if not body.name.strip():
+            raise HTTPException(status_code=400, detail="El nombre del producto no puede estar vacío.")
+        db_update["titulo"] = body.name.strip()
     if body.description is not None:
-        db_update["descripcion"] = body.description
+        desc_stripped = body.description.strip()
+        if len(desc_stripped) > 0 and len(desc_stripped) < 10:
+            raise HTTPException(
+                status_code=400,
+                detail="La descripción debe tener al menos 10 caracteres."
+            )
+        db_update["descripcion"] = desc_stripped if len(desc_stripped) >= 10 else "Sin descripción adicional sobre la prenda."
     if body.price is not None:
+        if body.price <= 0:
+            raise HTTPException(status_code=400, detail="El precio debe ser mayor a cero.")
         db_update["precio"] = body.price
     if body.status is not None:
         db_update["estado_publicacion"] = ui_status_to_db(body.status)
@@ -186,12 +266,15 @@ async def update_product(body: ProductUpdate, user=Depends(get_current_user)):
     if body.color is not None:
         db_update["color"] = body.color
     if body.gender is not None:
-        db_update["genero"] = body.gender
+        db_update["genero"] = normalize_genero(body.gender)
     if body.condition is not None:
         condicion_raw = body.condition.lower()
         db_update["condicion"] = "NUEVO" if condicion_raw in ("nuevo", "new") else "USADO"
-
-    prenda_id = int(body.id)
+    if body.category is not None:
+        try:
+            db_update["id_categoria"] = int(body.category) if body.category else 1
+        except (ValueError, TypeError):
+            db_update["id_categoria"] = 1
 
     # Actualizar imagen principal si se proporciona
     if body.image_url is not None:
@@ -223,14 +306,20 @@ async def update_product(body: ProductUpdate, user=Depends(get_current_user)):
 
     result_data = None
     if db_update:
-        resp = (
-            client.schema("catalogo")
-            .from_("prendas")
-            .update(db_update)
-            .eq("id_prenda", prenda_id)
-            .execute()
-        )
-        result_data = resp.data[0] if resp.data else None
+        try:
+            resp = (
+                client.schema("catalogo")
+                .from_("prendas")
+                .update(db_update)
+                .eq("id_prenda", prenda_id)
+                .execute()
+            )
+            result_data = resp.data[0] if resp.data else None
+        except Exception as e:
+            error_msg = str(e)
+            if "id_categoria" in error_msg:
+                raise HTTPException(status_code=400, detail="La categoría seleccionada no es válida.")
+            raise HTTPException(status_code=500, detail=f"Error al actualizar la prenda: {error_msg}")
 
     return {"data": result_data}
 
@@ -243,6 +332,10 @@ async def delete_products(body: ProductDelete, user=Depends(get_current_user)):
     Eliminar una o varias prendas por sus IDs.
     Primero elimina las imágenes asociadas para evitar errores de FK constraint.
     """
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
     client = get_admin_client()
 
     # Convertir IDs a enteros de forma segura
@@ -250,6 +343,23 @@ async def delete_products(body: ProductDelete, user=Depends(get_current_user)):
         ids_int = [int(i) for i in body.ids]
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Los IDs deben ser números válidos.")
+
+    # Verificar que todas las prendas a eliminar le pertenecen al usuario
+    prendas_resp = (
+        client.schema("catalogo")
+        .from_("prendas")
+        .select("id_prenda")
+        .in_("id_prenda", ids_int)
+        .eq("id_usuario", id_usuario)
+        .execute()
+    )
+    valid_ids = [p["id_prenda"] for p in prendas_resp.data or []]
+    
+    if len(valid_ids) != len(ids_int):
+        raise HTTPException(
+            status_code=403,
+            detail="No tienes permisos para eliminar una o más de las prendas seleccionadas."
+        )
 
     # 1. Eliminar imágenes asociadas primero (evitar FK constraint)
     client.schema("catalogo").from_("imagenes_prendas").delete().in_(

@@ -32,6 +32,7 @@ class ProductUpdate(BaseModel):
     gender: Optional[str] = None
     condition: Optional[str] = None
     brand: Optional[str] = None
+    category: Optional[str] = None
 
 
 class ProductDelete(BaseModel):
