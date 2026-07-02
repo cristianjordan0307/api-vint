@@ -26,14 +26,16 @@ app = FastAPI(
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # Permitir peticiones desde el frontend de Next.js
+import re
+from starlette.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"https://vint-project.*\.vercel\.app",
     allow_origins=[
-        settings.FRONTEND_URL,       # http://localhost:3000
+        settings.FRONTEND_URL,
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
