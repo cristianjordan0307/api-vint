@@ -12,7 +12,17 @@ Migrado de:
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from dependencies import verify_admin, get_current_user
 from supabase_client import get_admin_client
-from schemas.admin import UserPatch, RoleCreate, RolePatch, RoleAssign, PermissionAssign
+from schemas.admin import (
+    UserPatch,
+    RoleCreate,
+    RolePatch,
+    RoleAssign,
+    PermissionAssign,
+    CategoryCreate,
+    CategoryUpdate,
+    BrandCreate,
+    BrandUpdate,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -183,22 +193,14 @@ async def list_roles(admin=Depends(verify_admin)):
     """Listar todos los roles con sus permisos asociados."""
     client = get_admin_client()
 
-    try:
-        roles_resp = (
-            client.schema("seguridad")
-            .from_("roles")
-            .select("id_rol, nombre")
-            .order("id_rol")
-            .execute()
-        )
-        roles_data = roles_resp.data or []
-    except Exception:
-        # Fallback si falla la consulta de roles
-        roles_data = [
-            {"id_rol": 1, "nombre": "ADMIN"},
-            {"id_rol": 2, "nombre": "VENDEDOR"},
-            {"id_rol": 3, "nombre": "COMPRADOR"}
-        ]
+    roles_resp = (
+        client.schema("seguridad")
+        .from_("roles")
+        .select("id_rol, nombre")
+        .order("id_rol")
+        .execute()
+    )
+    roles_data = roles_resp.data or []
 
     roles_con_permisos = []
     for rol in roles_data:
@@ -216,17 +218,7 @@ async def list_roles(admin=Depends(verify_admin)):
                 if rp.get("permisos")
             ]
         except Exception:
-            # Fallback de permisos predeterminados si hay error de privilegios en BD
-            if rol["nombre"] == "ADMIN":
-                permisos = [
-                    {"id_permiso": 1, "nombre": "gestionar_usuarios", "descripcion": "Ver listado y modificar estado de usuarios registrados"},
-                    {"id_permiso": 2, "nombre": "eliminar_usuarios", "descripcion": "Eliminar permanentemente usuarios de la plataforma"},
-                    {"id_permiso": 3, "nombre": "gestionar_roles", "descripcion": "Crear, editar y eliminar roles del sistema"},
-                    {"id_permiso": 4, "nombre": "asignar_permisos", "descripcion": "Asignar y revocar permisos a los roles"},
-                    {"id_permiso": 5, "nombre": "ver_dashboard_admin", "descripcion": "Acceder al panel de administración"}
-                ]
-            else:
-                permisos = []
+            permisos = []
 
         roles_con_permisos.append({**rol, "permisos": permisos})
 
@@ -329,6 +321,65 @@ async def assign_role(body: RoleAssign, admin=Depends(verify_admin)):
     }
 
 
+@router.delete("/roles/{role_id}")
+async def delete_role(role_id: int, admin=Depends(verify_admin)):
+    """Eliminar un rol. No se pueden eliminar los roles base (ADMIN, VENDEDOR, COMPRADOR)."""
+    PROTECTED_ROLES = {"ADMIN", "VENDEDOR", "COMPRADOR"}
+    client = get_admin_client()
+
+    # Verificar que el rol exista
+    rol_resp = (
+        client.schema("seguridad")
+        .from_("roles")
+        .select("id_rol, nombre")
+        .eq("id_rol", role_id)
+        .single()
+        .execute()
+    )
+    if not rol_resp.data:
+        raise HTTPException(status_code=404, detail="El rol no existe.")
+
+    # No permitir eliminar roles base
+    if rol_resp.data["nombre"] in PROTECTED_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se puede eliminar el rol base '{rol_resp.data['nombre']}'.",
+        )
+
+    # Verificar que no haya usuarios con este rol
+    users_resp = (
+        client.schema("seguridad")
+        .from_("usuarios")
+        .select("id_usuario", count="exact")
+        .eq("id_rol", role_id)
+        .limit(1)
+        .execute()
+    )
+    if users_resp.count and users_resp.count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No se puede eliminar el rol '{rol_resp.data['nombre']}' porque tiene {users_resp.count} usuario(s) asignado(s). Reasígnalos primero.",
+        )
+
+    # Eliminar permisos asociados en rol_permisos
+    try:
+        client.schema("seguridad").from_("rol_permisos").delete().eq(
+            "id_rol", role_id
+        ).execute()
+    except Exception:
+        pass  # Si no hay permisos asociados o la tabla falla, continuar
+
+    # Eliminar el rol
+    client.schema("seguridad").from_("roles").delete().eq(
+        "id_rol", role_id
+    ).execute()
+
+    return {
+        "success": True,
+        "message": f"Rol '{rol_resp.data['nombre']}' eliminado correctamente.",
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PERMISSIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -337,24 +388,14 @@ async def assign_role(body: RoleAssign, admin=Depends(verify_admin)):
 async def list_permissions(admin=Depends(verify_admin)):
     """Listar todos los permisos disponibles."""
     client = get_admin_client()
-    try:
-        resp = (
-            client.schema("seguridad")
-            .from_("permisos")
-            .select("id_permiso, nombre, descripcion")
-            .order("id_permiso")
-            .execute()
-        )
-        permisos = resp.data or []
-    except Exception:
-        # Fallback de permisos si hay error de privilegios en BD
-        permisos = [
-            {"id_permiso": 1, "nombre": "gestionar_usuarios", "descripcion": "Ver listado y modificar estado de usuarios registrados"},
-            {"id_permiso": 2, "nombre": "eliminar_usuarios", "descripcion": "Eliminar permanentemente usuarios de la plataforma"},
-            {"id_permiso": 3, "nombre": "gestionar_roles", "descripcion": "Crear, editar y eliminar roles del sistema"},
-            {"id_permiso": 4, "nombre": "asignar_permisos", "descripcion": "Asignar y revocar permisos a los roles"},
-            {"id_permiso": 5, "nombre": "ver_dashboard_admin", "descripcion": "Acceder al panel de administración"}
-        ]
+    resp = (
+        client.schema("seguridad")
+        .from_("permisos")
+        .select("id_permiso, nombre, descripcion")
+        .order("id_permiso")
+        .execute()
+    )
+    permisos = resp.data or []
 
     return {
         "success": True,
@@ -388,3 +429,180 @@ async def assign_permissions(body: PermissionAssign, admin=Depends(verify_admin)
         "success": True,
         "message": f"{len(body.permissionIds)} permiso(s) asignados al rol.",
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CATEGORIES (ADMIN)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/categories", status_code=201)
+async def create_category(body: CategoryCreate, admin=Depends(verify_admin)):
+    """Crear una nueva categoría."""
+    client = get_admin_client()
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("categorias")
+            .insert({
+                "nombre": body.nombre.strip(),
+                "descripcion": body.descripcion.strip() if body.descripcion else None
+            })
+            .execute()
+        )
+        return {
+            "success": True,
+            "message": "Categoría creada correctamente.",
+            "data": resp.data[0] if resp.data else None
+        }
+    except Exception as e:
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Ya existe una categoría con ese nombre.")
+        raise HTTPException(status_code=500, detail=f"Error al crear categoría: {e}")
+
+
+@router.patch("/categories/{category_id}")
+async def update_category(category_id: int, body: CategoryUpdate, admin=Depends(verify_admin)):
+    """Actualizar una categoría existente."""
+    client = get_admin_client()
+    update_data = {}
+    if body.nombre is not None:
+        update_data["nombre"] = body.nombre.strip()
+    if body.descripcion is not None:
+        update_data["descripcion"] = body.descripcion.strip() if body.descripcion else None
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No se enviaron campos para actualizar.")
+
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("categorias")
+            .update(update_data)
+            .eq("id_categoria", category_id)
+            .execute()
+        )
+        return {
+            "success": True,
+            "message": "Categoría actualizada correctamente.",
+            "data": resp.data[0] if resp.data else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar categoría: {e}")
+
+
+@router.delete("/categories/{category_id}")
+async def delete_category(category_id: int, admin=Depends(verify_admin)):
+    """Eliminar una categoría (impide borrar si tiene prendas asociadas)."""
+    client = get_admin_client()
+    
+    # Verificar si tiene productos asociados
+    try:
+        count_resp = (
+            client.schema("catalogo")
+            .from_("prendas")
+            .select("id_prenda", count="exact")
+            .eq("id_categoria", category_id)
+            .limit(1)
+            .execute()
+        )
+        if count_resp.count and count_resp.count > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede eliminar la categoría porque tiene productos asociados."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al verificar productos asociados: {e}")
+
+    try:
+        client.schema("catalogo").from_("categorias").delete().eq("id_categoria", category_id).execute()
+        return {
+            "success": True,
+            "message": "Categoría eliminada correctamente."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar categoría: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BRANDS (ADMIN)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/brands", status_code=201)
+async def create_brand(body: BrandCreate, admin=Depends(verify_admin)):
+    """Crear una nueva marca."""
+    client = get_admin_client()
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("marcas")
+            .insert({"nombre": body.nombre.strip()})
+            .execute()
+        )
+        return {
+            "success": True,
+            "message": "Marca creada correctamente.",
+            "data": resp.data[0] if resp.data else None
+        }
+    except Exception as e:
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Ya existe una marca con ese nombre.")
+        raise HTTPException(status_code=500, detail=f"Error al crear marca: {e}")
+
+
+@router.patch("/brands/{brand_id}")
+async def update_brand(brand_id: int, body: BrandUpdate, admin=Depends(verify_admin)):
+    """Actualizar una marca existente."""
+    client = get_admin_client()
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("marcas")
+            .update({"nombre": body.nombre.strip()})
+            .eq("id_marca", brand_id)
+            .execute()
+        )
+        return {
+            "success": True,
+            "message": "Marca actualizada correctamente.",
+            "data": resp.data[0] if resp.data else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar marca: {e}")
+
+
+@router.delete("/brands/{brand_id}")
+async def delete_brand(brand_id: int, admin=Depends(verify_admin)):
+    """Eliminar una marca (impide borrar si tiene prendas asociadas)."""
+    client = get_admin_client()
+
+    # Verificar si tiene productos asociados
+    try:
+        count_resp = (
+            client.schema("catalogo")
+            .from_("prendas")
+            .select("id_prenda", count="exact")
+            .eq("id_marca", brand_id)
+            .limit(1)
+            .execute()
+        )
+        if count_resp.count and count_resp.count > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede eliminar la marca porque tiene productos asociados."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al verificar productos asociados: {e}")
+
+    try:
+        client.schema("catalogo").from_("marcas").delete().eq("id_marca", brand_id).execute()
+        return {
+            "success": True,
+            "message": "Marca eliminada correctamente."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar marca: {e}")
+

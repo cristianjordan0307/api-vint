@@ -43,6 +43,44 @@ def get_catalogo_client():
     )
 
 
+# ── GET /api/products/categories ─────────────────────────────────────────────
+
+@router.get("/categories")
+async def list_categories():
+    """Listar todas las categorías disponibles en el catálogo."""
+    client = get_admin_client()
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("categorias")
+            .select("id_categoria, nombre, descripcion")
+            .order("nombre")
+            .execute()
+        )
+        return {"success": True, "data": resp.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener categorías: {e}")
+
+
+# ── GET /api/products/brands ─────────────────────────────────────────────────
+
+@router.get("/brands")
+async def list_brands():
+    """Listar todas las marcas disponibles en el catálogo."""
+    client = get_admin_client()
+    try:
+        resp = (
+            client.schema("catalogo")
+            .from_("marcas")
+            .select("id_marca, nombre")
+            .order("nombre")
+            .execute()
+        )
+        return {"success": True, "data": resp.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener marcas: {e}")
+
+
 # ── GET /api/products ────────────────────────────────────────────────────────
 
 @router.get("")

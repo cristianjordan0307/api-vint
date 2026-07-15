@@ -1,17 +1,107 @@
 """
-routers/auth.py — Cambio de contraseña.
+routers/auth.py — Registro de usuarios y cambio de contraseña.
 
-Migrado de: src/app/api/auth/change-password/route.ts
+Endpoints:
+  POST /api/auth/register        → Crear cuenta nueva
+  POST /api/auth/change-password → Cambiar contraseña (requiere auth)
 """
 
 import re
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user, get_token
 from supabase_client import get_admin_client, get_anon_client
-from schemas.auth import ChangePasswordPayload
+from schemas.auth import RegisterPayload, ChangePasswordPayload
 
 router = APIRouter(prefix="/api/auth", tags=["Autenticación"])
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  REGISTRO
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/register")
+async def register(body: RegisterPayload):
+    """
+    Registra un nuevo usuario en Supabase Auth.
+    El trigger de la base de datos se encarga de crear el registro
+    correspondiente en seguridad.usuarios con la metadata proporcionada.
+    """
+    # ── Validación de contraseña ──────────────────────────────────────────
+    if not re.search(r"[A-Z]", body.password):
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe incluir al menos una letra mayúscula.",
+        )
+    if not re.search(r"[0-9]", body.password):
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe incluir al menos un número.",
+        )
+
+    # ── Determinar id_rol según el tipo de usuario ────────────────────────
+    id_rol = 2 if body.role == "vendedor" else 3
+
+    # ── Construir metadata para el trigger de Supabase ────────────────────
+    user_metadata = {
+        "full_name": f"{body.primer_nombre} {body.primer_apellido}".strip(),
+        "primer_nombre": body.primer_nombre,
+        "segundo_nombre": body.segundo_nombre or "",
+        "primer_apellido": body.primer_apellido,
+        "segundo_apellido": body.segundo_apellido or "",
+        "telefono": body.telefono or "",
+        "genero": body.genero or "",
+        "fecha_nacimiento": body.fecha_nacimiento or "",
+        "id_rol": id_rol,
+        "role": body.role,
+    }
+
+    # ── Crear usuario en Supabase Auth ────────────────────────────────────
+    anon = get_anon_client()
+    try:
+        result = anon.auth.sign_up({
+            "email": body.email,
+            "password": body.password,
+            "options": {"data": user_metadata},
+        })
+    except Exception as e:
+        error_msg = str(e)
+        if "already registered" in error_msg.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="Este correo electrónico ya está registrado.",
+            )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al crear el usuario: {error_msg}",
+        )
+
+    if not result.user:
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo crear el usuario. Intente de nuevo.",
+        )
+
+    # ── Respuesta ─────────────────────────────────────────────────────────
+    # Si Supabase requiere verificación de correo, no habrá sesión.
+    needs_verification = result.session is None
+    message = (
+        "Cuenta creada. Revisa tu correo electrónico para verificar tu cuenta."
+        if needs_verification
+        else "Cuenta creada exitosamente."
+    )
+
+    return {
+        "success": True,
+        "message": message,
+        "user_id": result.user.id,
+        "email": result.user.email,
+        "needs_verification": needs_verification,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CAMBIO DE CONTRASEÑA
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/change-password")
 async def change_password(

@@ -27,3 +27,22 @@ class RoleAssign(BaseModel):
 class PermissionAssign(BaseModel):
     roleId: int
     permissionIds: list[int]
+
+
+class CategoryCreate(BaseModel):
+    nombre: str
+    descripcion: str | None = None
+
+
+class CategoryUpdate(BaseModel):
+    nombre: str | None = None
+    descripcion: str | None = None
+
+
+class BrandCreate(BaseModel):
+    nombre: str
+
+
+class BrandUpdate(BaseModel):
+    nombre: str
+
