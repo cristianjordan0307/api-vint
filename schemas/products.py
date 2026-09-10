@@ -38,3 +38,9 @@ class ProductUpdate(BaseModel):
 class ProductDelete(BaseModel):
     # Acepta tanto strings como ints para máxima compatibilidad con el frontend
     ids: list[str]
+
+
+class ImagenCreate(BaseModel):
+    url_imagen: str
+    es_principal: bool = False
+    orden: int = 0

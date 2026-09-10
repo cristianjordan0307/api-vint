@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 
-from routers import products, admin, auth, recomendaciones, track, checkout
+from routers import products, admin, auth, recomendaciones, track, checkout, vendedor
 
 settings = get_settings()
 
@@ -49,6 +49,7 @@ app.include_router(auth.router)
 app.include_router(recomendaciones.router)
 app.include_router(track.router)
 app.include_router(checkout.router)
+app.include_router(vendedor.router)
 
 
 # ── Health check ─────────────────────────────────────────────────────────────

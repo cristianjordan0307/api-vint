@@ -7,7 +7,7 @@ Migrado de: src/app/api/products/route.ts
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user, resolve_id_usuario
 from supabase_client import get_admin_client
-from schemas.products import ProductCreate, ProductUpdate, ProductDelete
+from schemas.products import ProductCreate, ProductUpdate, ProductDelete, ImagenCreate
 
 router = APIRouter(prefix="/api/products", tags=["Productos"])
 
@@ -54,6 +54,23 @@ def get_catalogo_client():
     )
 
 
+# ── Helpers de ownership ─────────────────────────────────────────────────────
+
+async def _verify_prenda_owner(client, id_prenda: int, id_usuario: int):
+    """Verifica que la prenda exista y pertenezca al usuario. Lanza HTTPException si no."""
+    resp = (
+        client.schema("catalogo")
+        .from_("prendas")
+        .select("id_usuario")
+        .eq("id_prenda", id_prenda)
+        .execute()
+    )
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
+    if resp.data[0]["id_usuario"] != id_usuario:
+        raise HTTPException(status_code=403, detail="No tienes permisos para modificar esta prenda.")
+
+
 # ── GET /api/products/categories ─────────────────────────────────────────────
 
 @router.get("/categories")
@@ -69,6 +86,210 @@ async def get_categories():
     )
     mapped = [{"id": str(c["id_categoria"]), "nombre": c["nombre"]} for c in resp.data or []]
     return mapped
+
+
+# ── GET /api/products/marcas ──────────────────────────────────────────────────
+
+@router.get("/marcas")
+async def get_marcas():
+    """Retorna todas las marcas del catálogo para el dropdown de publicación. Sin auth."""
+    client = get_admin_client()
+    resp = (
+        client.schema("catalogo")
+        .from_("marcas")
+        .select("id_marca, nombre")
+        .order("nombre")
+        .execute()
+    )
+    return resp.data or []
+
+
+# ── GET /api/products/{id_prenda} ─────────────────────────────────────────────
+
+@router.get("/{id_prenda}")
+async def get_product_detail(id_prenda: int, user=Depends(get_current_user)):
+    """Retorna datos completos de una prenda con sus imágenes. Solo el propietario puede acceder."""
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    client = get_admin_client()
+
+    resp = (
+        client.schema("catalogo")
+        .from_("prendas")
+        .select(
+            "id_prenda, titulo, descripcion, precio, talla, color, genero, "
+            "condicion, estado_publicacion, fecha_publicacion, "
+            "id_categoria, categorias!left(nombre), "
+            "id_marca, marcas!left(nombre), "
+            "imagenes_prendas!left(id_imagen, url_imagen, es_principal, orden)"
+        )
+        .eq("id_prenda", id_prenda)
+        .execute()
+    )
+
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Prenda no encontrada.")
+
+    p = resp.data[0]
+    if p["id_usuario"] != id_usuario if "id_usuario" in p else True:
+        # Re-verificar con query directo para asegurar ownership
+        owner_check = (
+            client.schema("catalogo")
+            .from_("prendas")
+            .select("id_usuario")
+            .eq("id_prenda", id_prenda)
+            .execute()
+        )
+        if not owner_check.data or owner_check.data[0]["id_usuario"] != id_usuario:
+            raise HTTPException(status_code=404, detail="Prenda no encontrada o no pertenece al usuario autenticado.")
+
+    # Normalizar datos de joins
+    categoria_data = p.get("categorias")
+    categoria_nombre = ""
+    if isinstance(categoria_data, dict):
+        categoria_nombre = categoria_data.get("nombre", "")
+    elif isinstance(categoria_data, list) and categoria_data:
+        categoria_nombre = categoria_data[0].get("nombre", "")
+
+    marca_data = p.get("marcas")
+    marca_nombre = ""
+    if isinstance(marca_data, dict):
+        marca_nombre = marca_data.get("nombre", "")
+    elif isinstance(marca_data, list) and marca_data:
+        marca_nombre = marca_data[0].get("nombre", "")
+
+    imagenes_raw = p.get("imagenes_prendas") or []
+    imagenes = sorted(
+        [{"id_imagen": img["id_imagen"], "url_imagen": img["url_imagen"],
+          "es_principal": img["es_principal"], "orden": img["orden"]}
+         for img in imagenes_raw],
+        key=lambda x: (not x["es_principal"], x["orden"])
+    )
+
+    return {
+        "id_prenda": p["id_prenda"],
+        "titulo": p.get("titulo"),
+        "descripcion": p.get("descripcion"),
+        "id_categoria": p.get("id_categoria"),
+        "categoria": categoria_nombre,
+        "id_marca": p.get("id_marca"),
+        "marca": marca_nombre,
+        "talla": p.get("talla"),
+        "color": p.get("color"),
+        "precio": float(p.get("precio", 0)),
+        "genero": p.get("genero"),
+        "condicion": p.get("condicion"),
+        "estado_publicacion": p.get("estado_publicacion"),
+        "fecha_publicacion": p.get("fecha_publicacion"),
+        "imagenes": imagenes,
+    }
+
+
+# ── POST /api/products/{id_prenda}/imagenes ───────────────────────────────────
+
+@router.post("/{id_prenda}/imagenes", status_code=201)
+async def add_imagen(id_prenda: int, body: ImagenCreate, user=Depends(get_current_user)):
+    """Agrega una imagen a una prenda. La app sube el archivo a Storage y envía la URL."""
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    client = get_admin_client()
+    await _verify_prenda_owner(client, id_prenda, id_usuario)
+
+    resp = (
+        client.schema("catalogo")
+        .from_("imagenes_prendas")
+        .insert({
+            "id_prenda": id_prenda,
+            "url_imagen": body.url_imagen,
+            "es_principal": body.es_principal,
+            "orden": body.orden,
+        })
+        .execute()
+    )
+
+    if not resp.data:
+        raise HTTPException(status_code=500, detail="Error al guardar la imagen.")
+
+    img = resp.data[0]
+    return {
+        "id_imagen": img["id_imagen"],
+        "id_prenda": img["id_prenda"],
+        "url_imagen": img["url_imagen"],
+        "es_principal": img["es_principal"],
+        "orden": img["orden"],
+    }
+
+
+# ── DELETE /api/products/{id_prenda}/imagenes/{id_imagen} ─────────────────────
+
+@router.delete("/{id_prenda}/imagenes/{id_imagen}")
+async def delete_imagen(id_prenda: int, id_imagen: int, user=Depends(get_current_user)):
+    """Elimina una imagen de una prenda. Verifica ownership antes de proceder."""
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    client = get_admin_client()
+    await _verify_prenda_owner(client, id_prenda, id_usuario)
+
+    # Verificar que la imagen existe y pertenece a esa prenda
+    img_check = (
+        client.schema("catalogo")
+        .from_("imagenes_prendas")
+        .select("id_imagen")
+        .eq("id_imagen", id_imagen)
+        .eq("id_prenda", id_prenda)
+        .execute()
+    )
+    if not img_check.data:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada.")
+
+    client.schema("catalogo").from_("imagenes_prendas").delete().eq(
+        "id_imagen", id_imagen
+    ).execute()
+
+    return {"message": "Imagen eliminada correctamente"}
+
+
+# ── PATCH /api/products/{id_prenda}/imagenes/{id_imagen}/principal ─────────────
+
+@router.patch("/{id_prenda}/imagenes/{id_imagen}/principal")
+async def set_imagen_principal(id_prenda: int, id_imagen: int, user=Depends(get_current_user)):
+    """Marca una imagen como principal y desmarca el resto (solo una principal por prenda)."""
+    id_usuario = await resolve_id_usuario(user.email)
+    if not id_usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    client = get_admin_client()
+    await _verify_prenda_owner(client, id_prenda, id_usuario)
+
+    # Verificar que la imagen existe
+    img_check = (
+        client.schema("catalogo")
+        .from_("imagenes_prendas")
+        .select("id_imagen")
+        .eq("id_imagen", id_imagen)
+        .eq("id_prenda", id_prenda)
+        .execute()
+    )
+    if not img_check.data:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada.")
+
+    # Desmarcar todas las imágenes de la prenda
+    client.schema("catalogo").from_("imagenes_prendas").update(
+        {"es_principal": False}
+    ).eq("id_prenda", id_prenda).execute()
+
+    # Marcar la imagen seleccionada como principal
+    client.schema("catalogo").from_("imagenes_prendas").update(
+        {"es_principal": True}
+    ).eq("id_imagen", id_imagen).execute()
+
+    return {"message": "Imagen principal actualizada"}
 
 
 # ── GET /api/products ────────────────────────────────────────────────────────
