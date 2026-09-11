@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
-    FRONTEND_URL: str = "http://localhost:3000"
+    FRONTEND_URL: str = "https://vint-project-git-develop-elbrayanf022-6820s-projects.vercel.app/"
     ANTHROPIC_API_KEY: str | None = None
     MERCADOPAGO_ACCESS_TOKEN: str | None = None
 
