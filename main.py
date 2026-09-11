@@ -25,20 +25,24 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
-# Permitir peticiones desde el frontend de Next.js
+# Permitir peticiones desde el frontend (Next.js + Flutter Web)
 import re
-from starlette.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https://vint-project.*\.vercel\.app",
     allow_origins=[
         settings.FRONTEND_URL,
+        # Next.js
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        # Flutter Web — desarrollo local
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:5000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
