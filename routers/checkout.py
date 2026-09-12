@@ -13,6 +13,7 @@ from schemas.pedidos import CompraRequest
 from routers.pedidos import (
     ejecutar_compra_simulada,
     ejecutar_cancelacion_pedido,
+    obtener_detalle_venta_prenda,
     get_mis_compras as fetch_mis_compras,
     get_mis_ventas as fetch_mis_ventas,
 )
@@ -46,10 +47,17 @@ async def checkout_mis_ventas(user=Depends(get_current_user_pedidos)):
     return await fetch_mis_ventas(user)
 
 
+@router.get("/prenda/{id_prenda}")
+async def checkout_detalle_venta_prenda(id_prenda: int, user=Depends(get_current_user_pedidos)):
+    """Alias para consultar detalle de venta bajo /api/checkout/prenda/{id_prenda}."""
+    return await obtener_detalle_venta_prenda(id_prenda, user)
+
+
 @router.post("/{pedido_id}/cancelar")
 async def checkout_cancelar_pedido(pedido_id: str, user=Depends(get_current_user_pedidos)):
     """Alias para cancelar pedido bajo /api/checkout/{pedido_id}/cancelar."""
     return await ejecutar_cancelacion_pedido(pedido_id, user)
+
 
 
 

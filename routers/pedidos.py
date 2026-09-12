@@ -313,11 +313,79 @@ async def get_mis_ventas(user=Depends(get_current_user_pedidos)):
             "created_at": row.get("created_at"),
         })
 
+# ── GET /api/pedidos/prenda/{id_prenda} ──────────────────────────────────────
+
+async def obtener_detalle_venta_prenda(id_prenda: int, user) -> Dict[str, Any]:
+    """Obtiene los datos del pedido de una prenda vendida específica perteneciente al vendedor autenticado."""
+    client = get_admin_client()
+    vendedor_uuid = str(user.id)
+
+    res = (
+        client.schema("public")
+        .from_("pedidos")
+        .select("*")
+        .eq("id_prenda", id_prenda)
+        .eq("vendedor_id", vendedor_uuid)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not res.data:
+        raise PedidoError(
+            status_code=404,
+            error="No se encontró registro de venta para esta prenda",
+            code="VENTA_NO_ENCONTRADA",
+        )
+
+    order = res.data[0]
+
+    # Resolver nombre del comprador
+    buyer_uid = str(order.get("user_id") or "")
+    buyer_name = None
+    if buyer_uid:
+        try:
+            u_res = (
+                client.schema("seguridad")
+                .from_("usuarios")
+                .select("primer_nombre, primer_apellido, correo")
+                .eq("id_auth_supabase", buyer_uid)
+                .limit(1)
+                .execute()
+            )
+            if u_res.data:
+                u = u_res.data[0]
+                full_name = f"{u.get('primer_nombre') or ''} {u.get('primer_apellido') or ''}".strip()
+                buyer_name = full_name or u.get("correo")
+        except Exception:
+            pass
+
+    if not buyer_name:
+        dir_envio = order.get("direccion_envio") or {}
+        if isinstance(dir_envio, dict) and dir_envio.get("nombre"):
+            buyer_name = dir_envio.get("nombre")
+
     return {
         "success": True,
-        "data": formatted,
-        "count": len(formatted),
+        "data": {
+            "id": order["id"],
+            "id_prenda": order["id_prenda"],
+            "titulo_prenda": order.get("titulo_prenda"),
+            "imagen_prenda": order.get("imagen_prenda"),
+            "precio": format_amount(order.get("precio")),
+            "total": format_amount(order.get("total")),
+            "estado": order.get("estado"),
+            "metodo_pago": order.get("metodo_pago"),
+            "nombre_comprador": buyer_name or "Comprador",
+            "created_at": order.get("created_at"),
+        },
     }
+
+
+@router.get("/prenda/{id_prenda}")
+async def get_detalle_venta_prenda(id_prenda: int, user=Depends(get_current_user_pedidos)):
+    """Obtiene los datos del pedido de una prenda vendida específica."""
+    return await obtener_detalle_venta_prenda(id_prenda, user)
 
 
 # ── POST /api/pedidos/comprar (Alias conveniente) ────────────────────────────
