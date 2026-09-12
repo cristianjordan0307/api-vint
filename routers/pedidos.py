@@ -326,3 +326,107 @@ async def get_mis_ventas(user=Depends(get_current_user_pedidos)):
 async def comprar_alias(body: CompraRequest, user=Depends(get_current_user_pedidos)):
     """Alias para POST /api/checkout/comprar permitiendo consumo bajo /api/pedidos/comprar."""
     return await ejecutar_compra_simulada(body, user)
+
+
+# ── POST /api/pedidos/{pedido_id}/cancelar ───────────────────────────────────
+
+async def ejecutar_cancelacion_pedido(pedido_id: str, user) -> Dict[str, Any]:
+    """
+    Cancela un pedido y reactiva la prenda asociada a DISPONIBLE.
+    Valida existencia, propiedad (solo comprador) y estado actual.
+    """
+    client = get_admin_client()
+    user_id = str(user.id)
+
+    # 1. Buscar pedido
+    resp = (
+        client.schema("public")
+        .from_("pedidos")
+        .select("id, id_prenda, user_id, estado")
+        .eq("id", str(pedido_id))
+        .execute()
+    )
+
+    if not resp.data or len(resp.data) == 0:
+        raise PedidoError(
+            status_code=404,
+            error="Pedido no encontrado",
+            code="PEDIDO_NO_ENCONTRADO",
+        )
+
+    pedido = resp.data[0]
+
+    # Validar permisos: solo el comprador del pedido
+    if str(pedido.get("user_id")) != user_id:
+        raise PedidoError(
+            status_code=403,
+            error="No tienes permiso para cancelar este pedido",
+            code="PERMISO_DENEGADO",
+        )
+
+    # Validar si ya está cancelado
+    if pedido.get("estado") == "cancelado":
+        raise PedidoError(
+            status_code=400,
+            error="Este pedido ya se encuentra cancelado",
+            code="PEDIDO_YA_CANCELADO",
+        )
+
+    estado_previo = pedido.get("estado")
+    id_prenda = pedido.get("id_prenda")
+
+    # 2. Transacción de anulación con compensación
+    try:
+        # Marcar pedido como cancelado
+        upd_pedido = (
+            client.schema("public")
+            .from_("pedidos")
+            .update({"estado": "cancelado"})
+            .eq("id", str(pedido_id))
+            .execute()
+        )
+        if not upd_pedido.data:
+            raise RuntimeError("Fallo al actualizar el pedido a cancelado.")
+
+        # Volver la prenda a DISPONIBLE
+        upd_prenda = (
+            client.schema("catalogo")
+            .from_("prendas")
+            .update({"estado_publicacion": "DISPONIBLE"})
+            .eq("id_prenda", id_prenda)
+            .execute()
+        )
+        if not upd_prenda.data:
+            raise RuntimeError("Fallo al reactivar la prenda en el catálogo.")
+
+    except Exception as e:
+        # Rollback: restaurar estado previo del pedido si falló
+        try:
+            client.schema("public").from_("pedidos").update({"estado": estado_previo}).eq("id", str(pedido_id)).execute()
+        except Exception:
+            pass
+        raise PedidoError(
+            status_code=500,
+            error=f"Error al cancelar el pedido: {str(e)}",
+            code="ERROR_CANCELACION",
+        )
+
+    return {
+        "success": True,
+        "message": "Compra cancelada correctamente. La prenda vuelve a estar disponible para la venta.",
+        "data": {
+            "pedido_id": str(pedido["id"]),
+            "id_prenda": id_prenda,
+            "estado": "cancelado",
+        },
+    }
+
+
+@router.post("/{pedido_id}/cancelar")
+async def cancelar_pedido(pedido_id: str, user=Depends(get_current_user_pedidos)):
+    """
+    Cancela un pedido y reactiva la prenda asociada para que vuelva a estar DISPONIBLE.
+    Solo el comprador puede cancelar su pedido.
+    """
+    return await ejecutar_cancelacion_pedido(pedido_id, user)
+

@@ -10,7 +10,12 @@ from config import get_settings
 from supabase_client import get_admin_client
 from dependencies import get_current_user_pedidos
 from schemas.pedidos import CompraRequest
-from routers.pedidos import ejecutar_compra_simulada, get_mis_compras as fetch_mis_compras, get_mis_ventas as fetch_mis_ventas
+from routers.pedidos import (
+    ejecutar_compra_simulada,
+    ejecutar_cancelacion_pedido,
+    get_mis_compras as fetch_mis_compras,
+    get_mis_ventas as fetch_mis_ventas,
+)
 
 router = APIRouter(prefix="/api/checkout", tags=["Checkout"])
 settings = get_settings()
@@ -39,6 +44,13 @@ async def checkout_mis_compras(user=Depends(get_current_user_pedidos)):
 async def checkout_mis_ventas(user=Depends(get_current_user_pedidos)):
     """Alias para consultar ventas bajo /api/checkout/mis-ventas."""
     return await fetch_mis_ventas(user)
+
+
+@router.post("/{pedido_id}/cancelar")
+async def checkout_cancelar_pedido(pedido_id: str, user=Depends(get_current_user_pedidos)):
+    """Alias para cancelar pedido bajo /api/checkout/{pedido_id}/cancelar."""
+    return await ejecutar_cancelacion_pedido(pedido_id, user)
+
 
 
 class CartItem(BaseModel):
