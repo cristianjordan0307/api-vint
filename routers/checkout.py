@@ -2,15 +2,44 @@
 routers/checkout.py — Procesamiento de pagos con Mercado Pago y Webhooks.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
 from config import get_settings
 from supabase_client import get_admin_client
+from dependencies import get_current_user_pedidos
+from schemas.pedidos import CompraRequest
+from routers.pedidos import ejecutar_compra_simulada, get_mis_compras as fetch_mis_compras, get_mis_ventas as fetch_mis_ventas
 
 router = APIRouter(prefix="/api/checkout", tags=["Checkout"])
 settings = get_settings()
+
+
+# ── POST /api/checkout/comprar (Compra Simulada) ─────────────────────────────
+
+@router.post("/comprar")
+async def comprar_simulado(body: CompraRequest, user=Depends(get_current_user_pedidos)):
+    """
+    Endpoint principal para compra simulada.
+    Valida disponibilidad de prendas, registra los pedidos y actualiza inventario.
+    """
+    return await ejecutar_compra_simulada(body, user)
+
+
+# ── Aliases bajo /api/checkout ───────────────────────────────────────────────
+
+@router.get("/mis-compras")
+async def checkout_mis_compras(user=Depends(get_current_user_pedidos)):
+    """Alias para consultar compras bajo /api/checkout/mis-compras."""
+    return await fetch_mis_compras(user)
+
+
+@router.get("/mis-ventas")
+async def checkout_mis_ventas(user=Depends(get_current_user_pedidos)):
+    """Alias para consultar ventas bajo /api/checkout/mis-ventas."""
+    return await fetch_mis_ventas(user)
+
 
 class CartItem(BaseModel):
     id: str

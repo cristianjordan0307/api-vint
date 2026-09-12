@@ -10,6 +10,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase_client import get_admin_client
 
 security = HTTPBearer()
+security_pedidos = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
@@ -30,6 +31,37 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido o expirado. Inicia sesión nuevamente.",
+        )
+
+
+async def get_current_user_pedidos(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_pedidos),
+):
+    """
+    Autenticación específica para el flujo de compras y pedidos.
+    Retorna error estructurado conforme a la especificación en caso de token ausente o inválido.
+    """
+    from schemas.pedidos import PedidoError
+
+    if not credentials or not credentials.credentials:
+        raise PedidoError(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error="Token inválido o expirado",
+            code="AUTH_ERROR",
+        )
+
+    token = credentials.credentials
+    try:
+        client = get_admin_client()
+        response = client.auth.get_user(token)
+        if not response or not response.user:
+            raise ValueError("No user")
+        return response.user
+    except Exception:
+        raise PedidoError(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error="Token inválido o expirado",
+            code="AUTH_ERROR",
         )
 
 

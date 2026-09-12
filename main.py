@@ -5,11 +5,13 @@ Configura FastAPI, CORS y registra todos los routers.
 Ejecutar con: uvicorn main:app --reload --port 8000
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 
-from routers import products, admin, auth, recomendaciones, track, checkout, vendedor
+from routers import products, admin, auth, recomendaciones, track, checkout, vendedor, pedidos
+from schemas.pedidos import PedidoError
 
 settings = get_settings()
 
@@ -23,6 +25,19 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# ── Manejo centralizado de excepciones de pedidos ────────────────────────────
+@app.exception_handler(PedidoError)
+async def pedido_error_handler(request: Request, exc: PedidoError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error": exc.error,
+            "code": exc.code,
+            "detail": exc.error,
+        },
+    )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # Permitir peticiones desde el frontend (Next.js + Flutter Web en cualquier puerto local, y producción)
@@ -45,6 +60,7 @@ app.include_router(recomendaciones.router)
 app.include_router(track.router)
 app.include_router(checkout.router)
 app.include_router(vendedor.router)
+app.include_router(pedidos.router)
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
