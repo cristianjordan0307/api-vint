@@ -1,12 +1,26 @@
-﻿"""
+"""
 routers/vendedor.py — Endpoints del dashboard del vendedor autenticado.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user, resolve_id_usuario
 from supabase_client import get_admin_client
+from schemas.perfil import PerfilPublicoResponse
 
 router = APIRouter(prefix="/api/vendedor", tags=["Vendedor"])
+
+
+# -- GET /api/vendedor/{identifier}/publico ------------------------------------
+
+@router.get("/{identifier}/publico", response_model=PerfilPublicoResponse)
+async def get_vendedor_publico(identifier: str):
+    """
+    Retorna el perfil público y estadísticas reales de cualquier vendedor.
+    Acceso público sin autenticación requerida.
+    """
+    from routers.perfil import consultar_perfil_publico_vendedor
+    return await consultar_perfil_publico_vendedor(identifier)
+
 
 
 # -- GET /api/vendedor/stats --------------------------------------------------
