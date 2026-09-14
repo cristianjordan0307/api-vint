@@ -71,7 +71,7 @@ Endpoint **público** (sin autenticación requerida) para obtener la tarjeta y d
       SELECT COUNT(*) FROM catalogo.prendas 
       WHERE id_usuario = :user.id_usuario AND estado_publicacion = 'VENDIDA';
 
-   Total ventas exitosas = (a) + (b)
+   Total ventas exitosas = GREATEST((a), (b))
 
 5. Consultar prendas disponibles en venta:
    SELECT COUNT(*) FROM catalogo.prendas 
@@ -211,9 +211,10 @@ def get_vendedor_publico(identifier: str, db: Session = Depends(get_db)):
     # 2. Conteo de ventas exitosas
     ventas_query = text("""
         SELECT 
-          COALESCE((SELECT COUNT(*) FROM public.pedidos WHERE vendedor_id = :auth_id AND estado = 'completado'), 0) +
-          COALESCE((SELECT COUNT(*) FROM catalogo.prendas WHERE id_usuario = :user_id AND estado_publicacion = 'VENDIDA'), 0) 
-          AS ventas_exitosas,
+          GREATEST(
+            COALESCE((SELECT COUNT(*) FROM public.pedidos WHERE vendedor_id = :auth_id AND estado = 'completado'), 0),
+            COALESCE((SELECT COUNT(*) FROM catalogo.prendas WHERE id_usuario = :user_id AND estado_publicacion = 'VENDIDA'), 0)
+          ) AS ventas_exitosas,
           COALESCE((SELECT COUNT(*) FROM catalogo.prendas WHERE id_usuario = :user_id AND estado_publicacion = 'DISPONIBLE'), 0) 
           AS prendas_disponibles
     """)

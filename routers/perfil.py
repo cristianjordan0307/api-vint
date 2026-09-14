@@ -129,8 +129,8 @@ async def consultar_perfil_publico_vendedor(identifier: str) -> Dict[str, Any]:
             prendas_vendidas_count = prendas_v_resp.count or len(prendas_v_resp.data or [])
         except Exception:
             prendas_vendidas_count = 0
-
-    total_ventas_exitosas = ventas_pedidos_count + prendas_vendidas_count
+    # Usar el máximo (equivalente a GREATEST en SQL) para no duplicar ventas
+    total_ventas_exitosas = max(ventas_pedidos_count, prendas_vendidas_count)
 
     # 3. Conteo de prendas disponibles en venta
     prendas_disponibles_count = 0
