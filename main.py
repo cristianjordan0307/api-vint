@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 
-from routers import products, admin, auth, recomendaciones, track, checkout, vendedor, pedidos, perfil
+from routers import products, admin, auth, recomendaciones, track, checkout, vendedor, pedidos, perfil, reportes
 from schemas.pedidos import PedidoError
 
 settings = get_settings()
@@ -62,6 +62,7 @@ app.include_router(checkout.router)
 app.include_router(vendedor.router)
 app.include_router(pedidos.router)
 app.include_router(perfil.router)
+app.include_router(reportes.router)
 
 
 

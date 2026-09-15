@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str | None = None
     MERCADOPAGO_ACCESS_TOKEN: str | None = None
 
+    # Tasa de comisión que VINT retiene sobre las ventas válidas de un vendedor.
+    # No hay todavía una tasa de negocio confirmada en ningún otro lugar del código;
+    # 0.15 (15%) es un valor de referencia. Ajustar aquí cuando el negocio la confirme.
+    VINT_COMISION_PORCENTAJE: float = 0.15
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
