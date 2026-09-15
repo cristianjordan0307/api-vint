@@ -15,23 +15,25 @@ router = APIRouter(prefix="/api/products", tags=["Productos"])
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def ui_status_to_db(status: str) -> str:
-    if status == "published":
+    s = (status or "DISPONIBLE").upper()
+    if s in ("PUBLISHED", "DISPONIBLE"):
         return "DISPONIBLE"
-    if status == "sold":
-        return "VENDIDA"
-    if status == "archived":
+    if s in ("DRAFT", "PAUSADA"):
         return "PAUSADA"
-    return "PAUSADA"
+    if s in ("ARCHIVED", "VENDIDA", "SOLD"):
+        return "VENDIDA"
+    return "DISPONIBLE"
 
 
 def db_status_to_ui(estado: str) -> str:
-    if estado == "DISPONIBLE":
-        return "published"
-    if estado == "VENDIDA":
-        return "sold"
-    if estado == "PAUSADA":
-        return "archived"
-    return "draft"
+    e = (estado or "DISPONIBLE").upper()
+    if e in ("DISPONIBLE", "PUBLISHED"):
+        return "DISPONIBLE"
+    if e in ("VENDIDA", "SOLD", "ARCHIVED"):
+        return "VENDIDA"
+    if e in ("PAUSADA", "DRAFT"):
+        return "PAUSADA"
+    return "DISPONIBLE"
 
 
 def normalize_genero(gender_raw: str | None) -> str:
@@ -405,7 +407,8 @@ async def get_products(user=Depends(get_current_user)):
             "sku": "",
             "category": categoria_nombre,
             "category_id": p.get("id_categoria"),
-            "status": db_status_to_ui(p.get("estado_publicacion", "PAUSADA")),
+            "status": p.get("estado_publicacion", "DISPONIBLE"),
+            "estado_publicacion": p.get("estado_publicacion", "DISPONIBLE"),
             "image_url": principal.get("url_imagen") if principal else None,
             "created_at": p.get("fecha_publicacion", ""),
             "updated_at": p.get("fecha_publicacion", ""),
@@ -576,6 +579,16 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
         if len(desc_stripped) >= 10:
             desc_val = desc_stripped
 
+    status_input = (body.status or "DISPONIBLE").upper()
+    if status_input in ("PUBLISHED", "DISPONIBLE"):
+        estado_pub = "DISPONIBLE"
+    elif status_input in ("DRAFT", "PAUSADA"):
+        estado_pub = "PAUSADA"
+    elif status_input in ("ARCHIVED", "VENDIDA"):
+        estado_pub = "VENDIDA"
+    else:
+        estado_pub = "DISPONIBLE"
+
     insert_data = {
         "id_usuario": id_usuario,
         "id_categoria": id_categoria,
@@ -589,7 +602,7 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
         "genero": normalize_genero(body.gender),
         "id_estado_prenda": id_estado,
         "condicion": condicion_texto,
-        "estado_publicacion": ui_status_to_db(body.status or "draft"),
+        "estado_publicacion": estado_pub,
     }
 
     try:
