@@ -11,13 +11,16 @@ class ProductCreate(BaseModel):
     description: Optional[str] = None
     price: float
     category: Optional[str] = None
+    category_id: Optional[int] = None
+    brand: Optional[str] = None
+    brand_id: Optional[int] = None
     image_url: Optional[str] = None
     size: Optional[str] = None
     color: Optional[str] = None
     gender: Optional[str] = None
-    condition: Optional[str] = None
-    brand: Optional[str] = None
-    status: Optional[str] = None
+    id_estado_prenda: Optional[int] = None  # ID de catalogo.estados_prenda
+    condition: Optional[str] = None         # Mantener por retrocompatibilidad
+    status: Optional[str] = "DISPONIBLE"
 
 
 class ProductUpdate(BaseModel):
@@ -30,9 +33,12 @@ class ProductUpdate(BaseModel):
     size: Optional[str] = None
     color: Optional[str] = None
     gender: Optional[str] = None
-    condition: Optional[str] = None
+    id_estado_prenda: Optional[int] = None  # ID de catalogo.estados_prenda
+    condition: Optional[str] = None         # Mantener por retrocompatibilidad
     brand: Optional[str] = None
+    brand_id: Optional[int] = None
     category: Optional[str] = None
+    category_id: Optional[int] = None
 
 
 class ProductDelete(BaseModel):
