@@ -70,6 +70,7 @@ SET
     activo = EXCLUDED.activo;
 
 -- 3. Agregar columna id_estado_prenda a catalogo.prendas (si no existe)
+-- (No modificamos el tipo de la columna existente 'condicion' para no romper vistas dependientes)
 ALTER TABLE catalogo.prendas 
 ADD COLUMN IF NOT EXISTS id_estado_prenda INTEGER REFERENCES catalogo.estados_prenda(id_estado_prenda);
 
@@ -77,37 +78,20 @@ ADD COLUMN IF NOT EXISTS id_estado_prenda INTEGER REFERENCES catalogo.estados_pr
 CREATE INDEX IF NOT EXISTS idx_prendas_id_estado_prenda 
 ON catalogo.prendas(id_estado_prenda);
 
--- 4. Migrar los valores de texto actuales en catalogo.prendas (si existe la columna condicion o estado_prenda)
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_schema = 'catalogo' 
-          AND table_name = 'prendas' 
-          AND column_name = 'condicion'
-    ) THEN
-        -- Mapear valores antiguos a la nueva FK
-        UPDATE catalogo.prendas p
-        SET id_estado_prenda = e.id_estado_prenda
-        FROM catalogo.estados_prenda e
-        WHERE p.id_estado_prenda IS NULL
-          AND (
-              (UPPER(p.condicion) LIKE '%ETIQUETA%' AND UPPER(p.condicion) NOT LIKE '%SIN%' AND e.codigo = 'NUEVO_CON_ETIQUETA')
-              OR (UPPER(p.condicion) LIKE '%SIN%ETIQUETA%' AND e.codigo = 'NUEVO_SIN_ETIQUETA')
-              OR (UPPER(p.condicion) LIKE '%EXCELENTE%' OR UPPER(p.condicion) LIKE '%COMO_NUEVO%' AND e.codigo = 'EXCELENTE_ESTADO')
-              OR (UPPER(p.condicion) LIKE '%BUEN%' AND e.codigo = 'BUEN_ESTADO')
-              OR (UPPER(p.condicion) LIKE '%ACEPTABLE%' AND e.codigo = 'ACEPTABLE')
-              OR (UPPER(p.condicion) LIKE '%REGULAR%' AND e.codigo = 'REGULAR')
-              OR (UPPER(p.condicion) LIKE '%USADO%' AND e.codigo = 'BUEN_ESTADO')
-          );
+-- 4. Migrar los valores existentes en catalogo.prendas asignando su id_estado_prenda correspondiente
+-- Prendas 'NUEVO' -> id del estado 'Nuevo con etiqueta'
+UPDATE catalogo.prendas p
+SET id_estado_prenda = e.id_estado_prenda
+FROM catalogo.estados_prenda e
+WHERE e.codigo = 'NUEVO_CON_ETIQUETA'
+  AND (UPPER(p.condicion) LIKE '%NUEVO%' OR UPPER(p.condicion) LIKE '%ETIQUETA%');
 
-        -- Valor por defecto seguro para registros antiguos sin mapeo previo
-        UPDATE catalogo.prendas
-        SET id_estado_prenda = (SELECT id_estado_prenda FROM catalogo.estados_prenda WHERE codigo = 'BUEN_ESTADO')
-        WHERE id_estado_prenda IS NULL;
-    END IF;
-END $$;
+-- Prendas 'USADO' -> id del estado 'Buen estado'
+UPDATE catalogo.prendas p
+SET id_estado_prenda = e.id_estado_prenda
+FROM catalogo.estados_prenda e
+WHERE e.codigo = 'BUEN_ESTADO'
+  AND (UPPER(p.condicion) LIKE '%USADO%' OR p.id_estado_prenda IS NULL);
 
 -- 5. Configurar permisos RLS (Row Level Security) para Supabase
 ALTER TABLE catalogo.estados_prenda ENABLE ROW LEVEL SECURITY;
@@ -132,43 +116,6 @@ END $$;
 -- Otorgar privilegios de consulta
 GRANT USAGE ON SCHEMA catalogo TO anon, authenticated, service_role;
 GRANT SELECT ON catalogo.estados_prenda TO anon, authenticated, service_role;
-
--- 6. Actualizar o recrear vista pública catalogo.v_catalogo_publico si aplica
--- (Para exponer el nuevo id_estado_prenda y el nombre_estado_prenda)
-CREATE OR REPLACE VIEW catalogo.v_catalogo_publico AS
-SELECT 
-    p.id_prenda,
-    p.titulo,
-    p.descripcion,
-    p.id_categoria,
-    c.nombre AS categoria,
-    p.id_marca,
-    m.nombre AS marca,
-    p.talla,
-    p.color,
-    p.precio,
-    p.genero,
-    p.id_estado_prenda,
-    COALESCE(ep.nombre, p.condicion) AS condicion,
-    ep.nombre AS estado_prenda,
-    p.fecha_publicacion,
-    p.vendedor_id,
-    u.nombre AS vendedor,
-    u.email AS correo_vendedor,
-    (
-        SELECT pi.url_imagen 
-        FROM catalogo.prendas_imagenes pi 
-        WHERE pi.id_prenda = p.id_prenda AND pi.es_principal = TRUE 
-        LIMIT 1
-    ) AS imagen_principal
-FROM catalogo.prendas p
-LEFT JOIN catalogo.categorias c ON c.id_categoria = p.id_categoria
-LEFT JOIN catalogo.marcas m ON m.id_marca = p.id_marca
-LEFT JOIN catalogo.estados_prenda ep ON ep.id_estado_prenda = p.id_estado_prenda
-LEFT JOIN seguridad.usuarios u ON u.id_auth_supabase::text = p.vendedor_id::text
-WHERE p.estado_publicacion = 'DISPONIBLE' OR p.estado_publicacion = 'PUBLISHED';
-
-GRANT SELECT ON catalogo.v_catalogo_publico TO anon, authenticated, service_role;
 
 COMMIT;
 ```
