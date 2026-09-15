@@ -143,7 +143,7 @@ async def get_product_detail(id_prenda: int, user=Depends(get_current_user)):
             "id_prenda, titulo, descripcion, precio, talla, color, genero, "
             "condicion, id_estado_prenda, estado_publicacion, fecha_publicacion, "
             "id_categoria, categorias!left(nombre), "
-            "id_marca, marcas!left(nombre), "
+            "id_marca, marcas!left(nombre), otra_marca, "
             "estados_prenda!left(id_estado_prenda, nombre, codigo), "
             "imagenes_prendas!left(id_imagen, url_imagen, es_principal, orden)"
         )
@@ -182,6 +182,9 @@ async def get_product_detail(id_prenda: int, user=Depends(get_current_user)):
     elif isinstance(marca_data, list) and marca_data:
         marca_nombre = marca_data[0].get("nombre", "")
 
+    otra_marca_val = p.get("otra_marca")
+    marca_display = (otra_marca_val.strip() if otra_marca_val else "") or marca_nombre or "Sin marca"
+
     estado_data = p.get("estados_prenda")
     estado_obj = None
     if isinstance(estado_data, dict):
@@ -206,7 +209,10 @@ async def get_product_detail(id_prenda: int, user=Depends(get_current_user)):
         "id_categoria": p.get("id_categoria"),
         "categoria": categoria_nombre,
         "id_marca": p.get("id_marca"),
-        "marca": marca_nombre,
+        "marca": marca_display,
+        "brand": marca_display,
+        "otra_marca": otra_marca_val,
+        "marca_original": marca_nombre,
         "talla": p.get("talla"),
         "color": p.get("color"),
         "precio": float(p.get("precio", 0)),
@@ -345,7 +351,7 @@ async def get_products(user=Depends(get_current_user)):
             "id_prenda, titulo, descripcion, precio, talla, color, genero, "
             "condicion, id_estado_prenda, estado_publicacion, fecha_publicacion, id_categoria, "
             "categorias!left(nombre), "
-            "marcas!left(nombre), id_marca, "
+            "marcas!left(nombre), id_marca, otra_marca, "
             "estados_prenda!left(id_estado_prenda, nombre, codigo), "
             "imagenes_prendas!left(url_imagen, es_principal)"
         )
@@ -376,6 +382,9 @@ async def get_products(user=Depends(get_current_user)):
             marca_nombre = marca_data.get("nombre", "")
         elif isinstance(marca_data, list) and marca_data:
             marca_nombre = marca_data[0].get("nombre", "")
+
+        otra_marca_val = p.get("otra_marca")
+        marca_display = (otra_marca_val.strip() if otra_marca_val else "") or marca_nombre or "Sin marca"
 
         # Extraer estado de prenda del join
         estado_data = p.get("estados_prenda")
@@ -409,7 +418,10 @@ async def get_products(user=Depends(get_current_user)):
             "condicion": estado_nombre,
             "estado_prenda": estado_obj,
             "id_marca": p.get("id_marca"),
-            "brand": marca_nombre,
+            "brand": marca_display,
+            "marca": marca_display,
+            "otra_marca": otra_marca_val,
+            "marca_original": marca_nombre,
         })
 
     return {"data": mapped, "count": len(mapped)}
@@ -436,15 +448,60 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
     if id_categoria is None:
         id_categoria = 1
 
-    # Convertir brand a int si es posible, o usar brand_id si viene
+    # 1. Resolver id_marca:
     id_marca = body.brand_id
-    if id_marca is None and body.brand and str(body.brand).isdigit():
-        try:
+
+    if not id_marca and body.brand:
+        if str(body.brand).isdigit():
             id_marca = int(body.brand)
-        except (ValueError, TypeError):
+        else:
+            try:
+                res_m = (
+                    client.schema("catalogo")
+                    .from_("marcas")
+                    .select("id_marca")
+                    .ilike("nombre", body.brand.strip())
+                    .limit(1)
+                    .execute()
+                )
+                if res_m.data:
+                    id_marca = res_m.data[0]["id_marca"]
+            except Exception:
+                pass
+
+    # Si el usuario seleccionó "Otra" o envió otra_marca
+    if body.otra_marca:
+        try:
+            res_otra = (
+                client.schema("catalogo")
+                .from_("marcas")
+                .select("id_marca")
+                .ilike("nombre", "Otra%")
+                .limit(1)
+                .execute()
+            )
+            if res_otra.data:
+                id_marca = res_otra.data[0]["id_marca"]
+        except Exception:
+            pass
+
+    # Si no seleccionó ninguna marca, asignar por defecto 'Sin marca'
+    if not id_marca:
+        try:
+            res_sin = (
+                client.schema("catalogo")
+                .from_("marcas")
+                .select("id_marca")
+                .ilike("nombre", "Sin marca%")
+                .limit(1)
+                .execute()
+            )
+            if res_sin.data:
+                id_marca = res_sin.data[0]["id_marca"]
+            else:
+                id_marca = 1
+        except Exception:
             id_marca = 1
-    if id_marca is None:
-        id_marca = 1
 
     # Resolver id_estado_prenda y texto sincronizado para condicion
     id_estado = body.id_estado_prenda
@@ -523,6 +580,7 @@ async def create_product(body: ProductCreate, user=Depends(get_current_user)):
         "id_usuario": id_usuario,
         "id_categoria": id_categoria,
         "id_marca": id_marca,
+        "otra_marca": body.otra_marca.strip() if body.otra_marca and body.otra_marca.strip() else None,
         "titulo": body.name.strip(),
         "descripcion": desc_val,
         "precio": body.price,
@@ -654,10 +712,40 @@ async def update_product(body: ProductUpdate, user=Depends(get_current_user)):
     if body.brand_id is not None:
         db_update["id_marca"] = body.brand_id
     elif body.brand is not None:
-        try:
-            db_update["id_marca"] = int(body.brand) if str(body.brand).isdigit() else 1
-        except (ValueError, TypeError):
-            pass
+        if str(body.brand).isdigit():
+            db_update["id_marca"] = int(body.brand)
+        else:
+            try:
+                res_m = (
+                    client.schema("catalogo")
+                    .from_("marcas")
+                    .select("id_marca")
+                    .ilike("nombre", body.brand.strip())
+                    .limit(1)
+                    .execute()
+                )
+                if res_m.data:
+                    db_update["id_marca"] = res_m.data[0]["id_marca"]
+            except Exception:
+                pass
+
+    if body.otra_marca is not None:
+        db_update["otra_marca"] = body.otra_marca.strip() if body.otra_marca.strip() else None
+        # Si se envió otra_marca y no se especificó brand_id, asociar al id de 'Otra'
+        if db_update["otra_marca"] and "id_marca" not in db_update:
+            try:
+                res_otra = (
+                    client.schema("catalogo")
+                    .from_("marcas")
+                    .select("id_marca")
+                    .ilike("nombre", "Otra%")
+                    .limit(1)
+                    .execute()
+                )
+                if res_otra.data:
+                    db_update["id_marca"] = res_otra.data[0]["id_marca"]
+            except Exception:
+                pass
 
     # Actualizar imagen principal si se proporciona
     if body.image_url is not None:

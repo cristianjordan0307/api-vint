@@ -14,6 +14,7 @@ class ProductCreate(BaseModel):
     category_id: Optional[int] = None
     brand: Optional[str] = None
     brand_id: Optional[int] = None
+    otra_marca: Optional[str] = None  # Texto de marca personalizada
     image_url: Optional[str] = None
     size: Optional[str] = None
     color: Optional[str] = None
@@ -37,6 +38,7 @@ class ProductUpdate(BaseModel):
     condition: Optional[str] = None         # Mantener por retrocompatibilidad
     brand: Optional[str] = None
     brand_id: Optional[int] = None
+    otra_marca: Optional[str] = None  # Texto de marca personalizada
     category: Optional[str] = None
     category_id: Optional[int] = None
 
